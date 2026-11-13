@@ -1,76 +1,123 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import HortaCard from "./components/HortaCard";
+import HortaForm, { DadosForm } from "./components/HortaForm";
+import { notificar, pedirPermissao } from "./alertas";
+import { carregar, carregarAlertas, salvar, salvarAlertas } from "./store";
+import type { Horta, Origem } from "./types";
+import { atual, estado, limitar, TEXTO } from "./utils";
 
-type Horta = {
-  id: number;
-  nome: string;
-  local: string;
-  umidade: number;
-  atualizadoEm: string;
-};
-
-const STORAGE_KEY = "agrotech:hortas";
-
-const INICIAIS: Horta[] = [
-  { id: 1, nome: "Horta do Jardim Primavera", local: "Rua das Acácias", umidade: 54, atualizadoEm: new Date().toISOString() },
-  { id: 2, nome: "Horta da Escola Municipal", local: "Vila Esperança", umidade: 22, atualizadoEm: new Date().toISOString() },
-  { id: 3, nome: "Horta Comunitária do Centro", local: "Praça da Matriz", umidade: 78, atualizadoEm: new Date().toISOString() }
-];
-
-function status(u: number) {
-  if (u < 30) return { chave: "seca", texto: "Seca", dica: "Regar hoje" };
-  if (u > 70) return { chave: "encharcada", texto: "Encharcada", dica: "Suspender a rega" };
-  return { chave: "ideal", texto: "Ideal", dica: "Sem ação necessária" };
-}
-
-function hora(iso: string) {
-  return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
-
-function carregar(): Horta[] {
-  try {
-    const salvo = localStorage.getItem(STORAGE_KEY);
-    return salvo ? (JSON.parse(salvo) as Horta[]) : INICIAIS;
-  } catch {
-    return INICIAIS;
-  }
-}
+type Filtro = "todas" | "atencao" | "ideais";
 
 export default function App() {
   const [hortas, setHortas] = useState<Horta[]>(carregar);
-  const [nome, setNome] = useState("");
-  const [local, setLocal] = useState("");
-  const [umidade, setUmidade] = useState(50);
+  const [alertas, setAlertas] = useState<boolean>(carregarAlertas);
+  const [filtro, setFiltro] = useState<Filtro>("todas");
+  const [busca, setBusca] = useState("");
+  const [editando, setEditando] = useState<number | null>(null);
+  const [aviso, setAviso] = useState("");
+  const temporizador = useRef<number | undefined>(undefined);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(hortas));
-    } catch {
-      /* sem armazenamento disponível */
+  useEffect(() => salvar(hortas), [hortas]);
+
+  function mostrarAviso(msg: string) {
+    setAviso(msg);
+    window.clearTimeout(temporizador.current);
+    temporizador.current = window.setTimeout(() => setAviso(""), 4000);
+  }
+
+  function alternarAlertas() {
+    if (alertas) {
+      setAlertas(false);
+      salvarAlertas(false);
+      mostrarAviso("Alertas desligados.");
+      return;
     }
-  }, [hortas]);
+    pedirPermissao().then((ok) => {
+      setAlertas(ok);
+      salvarAlertas(ok);
+      mostrarAviso(ok ? "Alertas ligados: você será avisado quando uma horta precisar de atenção." : "Permissão de notificações negada.");
+    });
+  }
 
-  const ideais = hortas.filter((h) => status(h.umidade).chave === "ideal").length;
-  const atencao = hortas.length - ideais;
+  function aplicarLeituras(mudancas: { id: number; v: number; origem: Origem }[]) {
+    const agora = new Date().toISOString();
+    const avisos: string[] = [];
+    const proximas = hortas.map((h) => {
+      const m = mudancas.find((x) => x.id === h.id);
+      if (!m) return h;
+      const nova: Horta = {
+        ...h,
+        leituras: [...h.leituras, { t: agora, v: limitar(m.v), origem: m.origem }].slice(-60)
+      };
+      const antes = estado(h);
+      const depois = estado(nova);
+      if (depois !== antes && depois !== "ideal") avisos.push(`${h.nome}: ${TEXTO[depois].rotulo.toLowerCase()}. ${TEXTO[depois].dica}.`);
+      return nova;
+    });
+    setHortas(proximas);
+    if (alertas && avisos.length > 0) {
+      mostrarAviso(avisos[0]);
+      avisos.forEach((a) => notificar("AgroTech", a));
+    }
+  }
 
-  function adicionar(e: React.FormEvent) {
-    e.preventDefault();
-    if (!nome.trim()) return;
+  const leitura = (id: number, v: number, origem: Origem) => aplicarLeituras([{ id, v, origem }]);
+  const regar = (h: Horta) => leitura(h.id, atual(h).v + 25, "rega");
+
+  function simularSensores() {
+    aplicarLeituras(hortas.map((h) => ({ id: h.id, v: atual(h).v + Math.round(Math.random() * 30 - 18), origem: "sensor" as const })));
+    mostrarAviso("Leituras simuladas registradas em todas as hortas.");
+  }
+
+  function cadastrar(d: DadosForm) {
     setHortas([
       ...hortas,
-      { id: Date.now(), nome: nome.trim(), local: local.trim() || "Local não informado", umidade, atualizadoEm: new Date().toISOString() }
+      {
+        id: Date.now(),
+        nome: d.nome,
+        local: d.local,
+        cultura: d.cultura,
+        leituras: [{ t: new Date().toISOString(), v: d.umidade, origem: "manual" }],
+        notas: []
+      }
     ]);
-    setNome("");
-    setLocal("");
-    setUmidade(50);
+    mostrarAviso("Horta cadastrada.");
   }
 
-  function atualizar(id: number, valor: number) {
-    setHortas(hortas.map((h) => (h.id === id ? { ...h, umidade: valor, atualizadoEm: new Date().toISOString() } : h)));
+  function editar(id: number, d: DadosForm) {
+    setHortas(hortas.map((h) => (h.id === id ? { ...h, nome: d.nome, local: d.local, cultura: d.cultura } : h)));
+    setEditando(null);
+    mostrarAviso("Horta atualizada.");
   }
 
-  function remover(id: number) {
-    setHortas(hortas.filter((h) => h.id !== id));
+  function remover(h: Horta) {
+    if (window.confirm(`Remover "${h.nome}"? O histórico será apagado.`)) setHortas(hortas.filter((x) => x.id !== h.id));
   }
+
+  function adicionarNota(id: number, texto: string) {
+    setHortas(hortas.map((h) => (h.id === id ? { ...h, notas: [{ id: Date.now(), t: new Date().toISOString(), texto }, ...h.notas] } : h)));
+  }
+
+  function removerNota(id: number, notaId: number) {
+    setHortas(hortas.map((h) => (h.id === id ? { ...h, notas: h.notas.filter((n) => n.id !== notaId) } : h)));
+  }
+
+  const secas = hortas.filter((h) => estado(h) === "seca");
+  const encharcadas = hortas.filter((h) => estado(h) === "encharcada");
+  const atencao = secas.length + encharcadas.length;
+  const media = hortas.length ? Math.round(hortas.reduce((s, h) => s + atual(h).v, 0) / hortas.length) : 0;
+
+  const visiveis = useMemo(() => {
+    const termo = busca.trim().toLowerCase();
+    return hortas.filter((h) => {
+      const e = estado(h);
+      if (filtro === "atencao" && e === "ideal") return false;
+      if (filtro === "ideais" && e !== "ideal") return false;
+      return !termo || `${h.nome} ${h.local} ${h.cultura}`.toLowerCase().includes(termo);
+    });
+  }, [hortas, filtro, busca]);
+
+  const emEdicao = hortas.find((h) => h.id === editando);
 
   return (
     <main className="app">
@@ -80,68 +127,65 @@ export default function App() {
           {hortas.length === 0
             ? "Nenhuma horta cadastrada."
             : atencao === 0
-            ? "Todas as hortas estão com umidade ideal."
-            : `${atencao} de ${hortas.length} ${hortas.length === 1 ? "horta precisa" : "hortas precisam"} de atenção.`}
+            ? `Todas as hortas estão com umidade ideal. Média geral: ${media}%.`
+            : `${atencao} de ${hortas.length} ${hortas.length === 1 ? "horta precisa" : "hortas precisam"} de atenção. Média geral: ${media}%.`}
         </p>
+        {secas.length > 0 && <p className="regar">Regar hoje: {secas.map((h) => h.nome).join(", ")}</p>}
+        {encharcadas.length > 0 && <p className="regar azul">Suspender a rega: {encharcadas.map((h) => h.nome).join(", ")}</p>}
+        <div className="linha-botoes">
+          <button className="secundario" onClick={simularSensores} disabled={hortas.length === 0}>
+            Simular sensores
+          </button>
+          <button className="secundario" onClick={alternarAlertas} aria-pressed={alertas}>
+            Alertas: {alertas ? "ligados" : "desligados"}
+          </button>
+        </div>
       </header>
 
+      {aviso && (
+        <p className="aviso" role="status">
+          {aviso}
+        </p>
+      )}
+
+      <div className="filtros">
+        <input type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por nome, local ou cultura" aria-label="Buscar hortas" />
+        <div className="chips" role="group" aria-label="Filtrar por situação">
+          {([
+            ["todas", `Todas (${hortas.length})`],
+            ["atencao", `Atenção (${atencao})`],
+            ["ideais", `Ideais (${hortas.length - atencao})`]
+          ] as [Filtro, string][]).map(([chave, rotulo]) => (
+            <button key={chave} className={filtro === chave ? "chip ativo" : "chip"} onClick={() => setFiltro(chave)}>
+              {rotulo}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <section className="lista" aria-label="Hortas">
-        {hortas.length === 0 && <p className="vazio">Cadastre a primeira horta no formulário abaixo.</p>}
-        {hortas.map((h) => {
-          const s = status(h.umidade);
-          return (
-            <article key={h.id} className={`horta ${s.chave}`}>
-              <div className="horta-info">
-                <h2>{h.nome}</h2>
-                <p className="local">{h.local}</p>
-                <p className="leitura">
-                  <strong>{h.umidade}%</strong> <span className="selo">{s.texto}</span>
-                </p>
-                <p className="dica">{s.dica}</p>
-                <label className="ajuste">
-                  <span>Nova leitura</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={h.umidade}
-                    onChange={(e) => atualizar(h.id, Number(e.target.value))}
-                  />
-                </label>
-                <p className="meta">Atualizado em {hora(h.atualizadoEm)}</p>
-                <button className="remover" onClick={() => remover(h.id)}>
-                  Remover horta
-                </button>
-              </div>
-              <div className="solo" role="img" aria-label={`Umidade do solo: ${h.umidade}%`}>
-                <div className="faixa-ideal" />
-                <div className="agua" style={{ height: `${h.umidade}%` }} />
-              </div>
-            </article>
-          );
-        })}
+        {visiveis.length === 0 && <p className="vazio">{hortas.length === 0 ? "Cadastre a primeira horta no formulário abaixo." : "Nenhuma horta encontrada com esse filtro."}</p>}
+        {visiveis.map((h) => (
+          <HortaCard
+            key={h.id}
+            horta={h}
+            onLeitura={(v, origem) => leitura(h.id, v, origem)}
+            onRegar={() => regar(h)}
+            onEditar={() => setEditando(h.id)}
+            onRemover={() => remover(h)}
+            onNota={(t) => adicionarNota(h.id, t)}
+            onRemoverNota={(n) => removerNota(h.id, n)}
+          />
+        ))}
       </section>
 
-      <form className="novo" onSubmit={adicionar}>
-        <h2>Cadastrar horta</h2>
-        <label>
-          Nome
-          <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex.: Horta da Rua 7" required />
-        </label>
-        <label>
-          Local
-          <input value={local} onChange={(e) => setLocal(e.target.value)} placeholder="Bairro ou endereço" />
-        </label>
-        <label>
-          Umidade inicial: {umidade}%
-          <input type="range" min={0} max={100} value={umidade} onChange={(e) => setUmidade(Number(e.target.value))} />
-        </label>
-        <button type="submit" className="salvar">
-          Salvar horta
-        </button>
-      </form>
+      {emEdicao ? (
+        <HortaForm key={emEdicao.id} inicial={emEdicao} onSalvar={(d) => editar(emEdicao.id, d)} onCancelar={() => setEditando(null)} />
+      ) : (
+        <HortaForm onSalvar={cadastrar} />
+      )}
 
-      <p className="legenda">Faixa ideal de umidade do solo: 30% a 70%.</p>
+      <p className="legenda">As faixas de umidade por cultura são valores de referência aproximados.</p>
     </main>
   );
 }
