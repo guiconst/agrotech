@@ -2,11 +2,13 @@
 
 Monitoramento de umidade de hortas comunitárias. React + Vite + Capacitor (Android).
 
-## Prints do app
+## Mockups
 
-| Tela do aplicativo | Ícone na tela inicial do celular |
-| --- | --- |
-| <img src="prints/tela-app.png" alt="Tela principal do AgroTech com resumo, filtros e cards das hortas" width="260"> | <img src="prints/icone-no-celular.png" alt="Ícone do AgroTech instalado na tela inicial do Android" width="260"> |
+<img src="mockups/tela-principal.jpg" alt="Tela principal do AgroTech com resumo, filtros e cards das hortas" width="520">
+
+<img src="mockups/historico-e-anotacoes.jpg" alt="Detalhes de uma horta com histórico de umidade e anotações" width="520">
+
+<img src="mockups/icone-no-celular.jpg" alt="Ícone do AgroTech instalado na tela inicial do Android" width="520">
 
 Ícone e splash na pasta `assets/` (gerados com `@capacitor/assets`).
 
